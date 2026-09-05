@@ -6,7 +6,10 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 from pathlib import Path
 
 
@@ -21,7 +24,12 @@ from control.diagnostics import (  # noqa: E402
     classify_ansible_failure,
     short_error_detail,
 )
-from control.state import save_state  # noqa: E402
+from control.policy import load_policy  # noqa: E402
+from control.state import (  # noqa: E402
+    load_state,
+    preserve_last_seen,
+    save_state,
+)
 
 
 INVENTORY = ROOT / "ansible" / "inventory.yml"
@@ -29,29 +37,78 @@ ANSIBLE_CONFIG = ROOT / "ansible" / "ansible.cfg"
 
 
 def now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def command_timeout():
+    policy = load_policy()
+
+    return (
+        policy
+        .get("runtime", {})
+        .get(
+            "command_timeout_seconds",
+            20,
+        )
+    )
 
 
 def run_command(command):
     env = os.environ.copy()
-    env["ANSIBLE_CONFIG"] = str(ANSIBLE_CONFIG)
-
-    result = subprocess.run(
-        command,
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        env=env,
+    env["ANSIBLE_CONFIG"] = str(
+        ANSIBLE_CONFIG
     )
 
-    return {
-        "rc": result.returncode,
-        "stdout": result.stdout.strip(),
-        "stderr": result.stderr.strip(),
-    }
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=command_timeout(),
+        )
+
+        return {
+            "rc": result.returncode,
+            "stdout": (
+                result.stdout.strip()
+            ),
+            "stderr": (
+                result.stderr.strip()
+            ),
+            "timed_out": False,
+        }
+
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(
+                errors="replace"
+            )
+
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(
+                errors="replace"
+            )
+
+        return {
+            "rc": 124,
+            "stdout": stdout.strip(),
+            "stderr": stderr.strip(),
+            "timed_out": True,
+        }
 
 
-def run_ansible(host, module, args=None):
+def run_ansible(
+    host,
+    module,
+    args=None,
+):
     command = [
         "ansible",
         "-i",
@@ -70,25 +127,42 @@ def run_ansible(host, module, args=None):
     return run_command(command)
 
 
-def host_actually_ran(result, host):
+def host_actually_ran(
+    result,
+    host,
+):
     return bool(
         re.search(
-            rf"(?m)^{re.escape(host)}\s+\|",
-            result.get("stdout", ""),
+            rf"(?m)^{re.escape(host)}\\s+\\|",
+            result.get(
+                "stdout",
+                "",
+            ),
         )
     )
 
 
-def extract_ansible_payload(result):
-    stdout = result.get("stdout", "")
+def extract_ansible_payload(
+    result,
+):
+    stdout = result.get(
+        "stdout",
+        "",
+    )
 
     if ">>" not in stdout:
         return ""
 
-    return stdout.split(">>", 1)[1].strip()
+    return stdout.split(
+        ">>",
+        1,
+    )[1].strip()
 
 
-def connectivity_status(host, platform):
+def connectivity_status(
+    host,
+    platform,
+):
     module = (
         "ansible.windows.win_ping"
         if platform == "windows"
@@ -102,8 +176,13 @@ def connectivity_status(host, platform):
 
     success = (
         result["rc"] == 0
-        and host_actually_ran(result, host)
-        and '"ping": "pong"' in result["stdout"]
+        and not result["timed_out"]
+        and host_actually_ran(
+            result,
+            host,
+        )
+        and '"ping": "pong"'
+        in result["stdout"]
     )
 
     if success:
@@ -119,17 +198,24 @@ def connectivity_status(host, platform):
         "reachable": False,
         "connectivity": {
             "status": "unreachable",
-            "reason": classify_ansible_failure(
-                result
+            "reason": (
+                classify_ansible_failure(
+                    result
+                )
             ),
-            "detail": short_error_detail(
-                result
+            "detail": (
+                short_error_detail(
+                    result
+                )
             ),
         },
     }
 
 
-def docker_status(host, platform):
+def docker_status(
+    host,
+    platform,
+):
     if platform == "windows":
         return {
             "available": False,
@@ -144,7 +230,11 @@ def docker_status(host, platform):
 
     if (
         result["rc"] == 0
-        and host_actually_ran(result, host)
+        and not result["timed_out"]
+        and host_actually_ran(
+            result,
+            host,
+        )
     ):
         return {
             "available": True,
@@ -154,14 +244,21 @@ def docker_status(host, platform):
     return {
         "available": False,
         "reason": (
-            classify_ansible_failure(result)
-            if result["rc"] != 0
+            classify_ansible_failure(
+                result
+            )
+            if (
+                result["rc"] != 0
+                or result["timed_out"]
+            )
             else "not_found"
         ),
     }
 
 
-def parse_gpu_csv(payload):
+def parse_gpu_csv(
+    payload,
+):
     if not payload:
         return None
 
@@ -175,7 +272,8 @@ def parse_gpu_csv(payload):
 
         parts = [
             item.strip()
-            for item in line.split(",")
+            for item
+            in line.split(",")
         ]
 
         if len(parts) != 5:
@@ -184,7 +282,8 @@ def parse_gpu_csv(payload):
         try:
             total, used, free, temp, util = [
                 int(value)
-                for value in parts
+                for value
+                in parts
             ]
         except ValueError:
             continue
@@ -217,12 +316,18 @@ def gpu_status_linux(host):
     )
 
     metrics = parse_gpu_csv(
-        extract_ansible_payload(result)
+        extract_ansible_payload(
+            result
+        )
     )
 
     if (
         result["rc"] == 0
-        and host_actually_ran(result, host)
+        and not result["timed_out"]
+        and host_actually_ran(
+            result,
+            host,
+        )
         and metrics
     ):
         return {
@@ -234,8 +339,13 @@ def gpu_status_linux(host):
     return {
         "available": False,
         "reason": (
-            classify_ansible_failure(result)
-            if result["rc"] != 0
+            classify_ansible_failure(
+                result
+            )
+            if (
+                result["rc"] != 0
+                or result["timed_out"]
+            )
             else "metrics_unavailable"
         ),
     }
@@ -258,12 +368,18 @@ def gpu_status_windows(host):
     )
 
     metrics = parse_gpu_csv(
-        extract_ansible_payload(result)
+        extract_ansible_payload(
+            result
+        )
     )
 
     if (
         result["rc"] == 0
-        and host_actually_ran(result, host)
+        and not result["timed_out"]
+        and host_actually_ran(
+            result,
+            host,
+        )
         and metrics
     ):
         return {
@@ -275,19 +391,33 @@ def gpu_status_windows(host):
     return {
         "available": False,
         "reason": (
-            classify_ansible_failure(result)
-            if result["rc"] != 0
+            classify_ansible_failure(
+                result
+            )
+            if (
+                result["rc"] != 0
+                or result["timed_out"]
+            )
             else "metrics_unavailable"
         ),
     }
 
 
-def collect_node_state(name, node):
-    platform = node.get("platform")
+def collect_node_state(
+    name,
+    node,
+    previous_state=None,
+):
+    platform = node.get(
+        "platform"
+    )
+
+    observed_at = now()
 
     state = {
+        "observed_at": observed_at,
+        "last_seen": None,
         "reachable": False,
-        "last_seen": now(),
         "connectivity": {
             "status": "unknown",
             "reason": "not_checked",
@@ -310,6 +440,14 @@ def collect_node_state(name, node):
 
     state.update(connection)
 
+    state["last_seen"] = (
+        preserve_last_seen(
+            previous_state,
+            state["reachable"],
+            observed_at,
+        )
+    )
+
     if not state["reachable"]:
         state["docker"]["reason"] = (
             "node_unreachable"
@@ -317,6 +455,7 @@ def collect_node_state(name, node):
         state["gpu"]["reason"] = (
             "node_unreachable"
         )
+
         return state
 
     docker = docker_status(
@@ -334,14 +473,20 @@ def collect_node_state(name, node):
         {},
     )
 
-    if capabilities.get("gpu_worker") is True:
+    if capabilities.get(
+        "gpu_worker"
+    ) is True:
         if platform == "windows":
             state["gpu"] = (
-                gpu_status_windows(name)
+                gpu_status_windows(
+                    name
+                )
             )
         else:
             state["gpu"] = (
-                gpu_status_linux(name)
+                gpu_status_linux(
+                    name
+                )
             )
 
     return state
@@ -362,9 +507,23 @@ def main():
 
     nodes = load_nodes()
 
+    previous = load_state()
+
+    previous_nodes = (
+        previous
+        .get(
+            "cluster_state",
+            {},
+        )
+        .get(
+            "nodes",
+            {},
+        )
+    )
+
     data = {
         "cluster_state": {
-            "schema_version": 2,
+            "schema_version": 3,
             "generated_at": now(),
             "nodes": {},
         }
@@ -384,6 +543,10 @@ def main():
         ] = collect_node_state(
             name,
             node,
+            previous_nodes.get(
+                name,
+                {},
+            ),
         )
 
     save_state(data)

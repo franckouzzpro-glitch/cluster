@@ -24,12 +24,16 @@ def utc_now():
     )
 
 
+def now_iso():
+    return utc_now().isoformat()
+
+
 def empty_state():
     return {
         "cluster_state": {
-            "schema_version": 2,
+            "schema_version": 3,
             "generated_at": (
-                utc_now().isoformat()
+                now_iso()
             ),
             "nodes": {},
         }
@@ -141,3 +145,41 @@ def runtime_metadata(
         "generated_at": generated_at,
         "age_seconds": age_seconds,
     }
+
+
+def preserve_last_seen(
+    previous_node_state,
+    current_reachable,
+    observed_at,
+):
+    if current_reachable:
+        return observed_at
+
+    previous_node_state = (
+        previous_node_state or {}
+    )
+
+    return previous_node_state.get(
+        "last_seen"
+    )
+
+
+def runtime_status(
+    runtime_nodes,
+    runtime_info,
+    max_age_seconds,
+):
+    if not runtime_nodes:
+        return "missing"
+
+    age = runtime_info.get(
+        "age_seconds"
+    )
+
+    if age is None:
+        return "missing"
+
+    if age > max_age_seconds:
+        return "stale"
+
+    return "fresh"

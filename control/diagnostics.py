@@ -5,6 +5,9 @@ def classify_ansible_failure(result):
     """
     Convert Ansible/SSH failure text into a stable machine-readable reason.
     """
+    if result.get("timed_out") is True:
+        return "timeout"
+
     text = (
         f"{result.get('stdout', '')}\n"
         f"{result.get('stderr', '')}"

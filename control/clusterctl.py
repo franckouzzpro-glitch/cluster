@@ -226,6 +226,12 @@ def main():
                 )
 
                 print(
+                    "Runtime: "
+                    f"{result['runtime']['status']} "
+                    f"(age={result['runtime']['age_seconds']})"
+                )
+
+                print(
                     "Ranking: "
                     + " > ".join(
                         result[

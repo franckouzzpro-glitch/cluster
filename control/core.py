@@ -11,6 +11,7 @@ from control.policy import (
 from control.state import (
     load_state,
     runtime_metadata,
+    runtime_status,
 )
 
 
@@ -493,18 +494,25 @@ def place(
         "age_seconds"
     )
 
-    runtime_present = bool(
-        runtime_nodes
+    runtime_state_status = runtime_status(
+        runtime_nodes,
+        runtime_info,
+        max_age,
+    )
+
+    runtime_present = (
+        runtime_state_status
+        != "missing"
     )
 
     runtime_fresh = (
-        runtime_age is not None
-        and runtime_age <= max_age
+        runtime_state_status
+        == "fresh"
     )
 
     runtime_usable = (
-        runtime_present
-        and runtime_fresh
+        runtime_state_status
+        == "fresh"
     )
 
     evaluations = []
@@ -663,6 +671,7 @@ def place(
             ),
         },
         "runtime": {
+            "status": runtime_state_status,
             "present": runtime_present,
             "fresh": runtime_fresh,
             "age_seconds": runtime_age,

@@ -1,24 +1,20 @@
 schema_version: 1
-
 runtime:
   required: true
   max_age_seconds: 300
-
+  command_timeout_seconds: 20
 eligibility:
   require_reachable: true
   require_runtime_gpu_for_gpu_jobs: true
   require_runtime_docker_for_docker_jobs: true
-
 gpu:
   ranking:
-    - gpu_free_vram_desc
-    - gpu_utilization_asc
-    - gpu_temperature_asc
-    - inventory_order
-
+  - gpu_free_vram_desc
+  - gpu_utilization_asc
+  - gpu_temperature_asc
+  - inventory_order
   limits:
     max_temperature_c: 80
-
 general:
   ranking:
-    - inventory_order
+  - inventory_order

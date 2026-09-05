@@ -71,6 +71,20 @@ def validate_policy(policy):
             "must be a positive integer"
         )
 
+    timeout = runtime.get(
+        "command_timeout_seconds"
+    )
+
+    if (
+        not isinstance(timeout, int)
+        or isinstance(timeout, bool)
+        or timeout <= 0
+    ):
+        raise PolicyError(
+            "runtime.command_timeout_seconds "
+            "must be a positive integer"
+        )
+
     gpu_ranking = (
         policy
         .get("gpu", {})
