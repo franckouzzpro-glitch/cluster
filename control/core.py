@@ -835,6 +835,11 @@ def place(
             "present": runtime_present,
             "fresh": runtime_fresh,
             "age_seconds": runtime_age,
+            "generated_at": (
+                runtime_info.get("generated_at")
+                if runtime_info
+                else None
+            ),
         },
         "ranking_policy": ranking_rules,
         "decision": build_decision_trace(
@@ -846,6 +851,208 @@ def place(
         "candidates": candidates,
         "evaluations": evaluations,
     }
+
+
+
+def canonical_plan_payload(
+    intent,
+    required_capabilities,
+    placement_result,
+):
+    return {
+        "intent": intent.strip(),
+        "required_capabilities": list(
+            required_capabilities
+        ),
+        "selected": placement_result.get(
+            "selected"
+        ),
+        "selection_policy": placement_result.get(
+            "selection_policy"
+        ),
+        "ranking_policy": placement_result.get(
+            "ranking_policy"
+        ),
+        "decision_reasons": (
+            placement_result
+            .get("decision", {})
+            .get("decision_reasons", [])
+        ),
+        "runtime_snapshot": {
+            "generated_at": (
+                placement_result
+                .get("runtime", {})
+                .get("generated_at")
+            ),
+        },
+    }
+
+
+def build_plan_id(payload):
+    import hashlib
+    import json
+
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return hashlib.sha256(
+        encoded
+    ).hexdigest()[:16]
+
+
+def build_plan(
+    nodes,
+    intent,
+    required_capabilities,
+    runtime_nodes=None,
+    policy=None,
+    runtime_info=None,
+):
+    """Build a deterministic non-executing workload plan."""
+
+    intent = str(intent).strip()
+
+    if not intent:
+        raise ClusterError(
+            "Plan intent must not be empty."
+        )
+
+    required = list(
+        dict.fromkeys(
+            required_capabilities
+        )
+    )
+
+    if not required:
+        raise ClusterError(
+            "Plan requires at least one capability."
+        )
+
+    placement_result = place(
+        nodes,
+        required,
+        runtime_nodes,
+        policy=policy,
+        runtime_info=runtime_info,
+    )
+
+    payload = canonical_plan_payload(
+        intent,
+        required,
+        placement_result,
+    )
+
+    plan_id = build_plan_id(
+        payload
+    )
+
+    selected = placement_result[
+        "selected"
+    ]
+
+    validations = [
+        {
+            "check": "intent_present",
+            "status": "pass",
+        },
+        {
+            "check": "capabilities_present",
+            "status": "pass",
+            "required_capabilities": (
+                required
+            ),
+        },
+        {
+            "check": "runtime_fresh",
+            "status": (
+                "pass"
+                if placement_result[
+                    "runtime"
+                ]["fresh"]
+                else "fail"
+            ),
+        },
+        {
+            "check": "eligible_node_found",
+            "status": "pass",
+            "selected": selected,
+        },
+    ]
+
+    verdict = "VALID"
+
+    if any(
+        item["status"] == "fail"
+        for item in validations
+    ):
+        verdict = "INVALID"
+
+    steps = [
+        {
+            "order": 1,
+            "type": "validate",
+            "description": (
+                "Validate requested capabilities "
+                "against declared inventory."
+            ),
+        },
+        {
+            "order": 2,
+            "type": "placement",
+            "description": (
+                "Evaluate eligible nodes using "
+                "versioned placement policy and "
+                "fresh runtime state."
+            ),
+        },
+        {
+            "order": 3,
+            "type": "target",
+            "description": (
+                f"Target selected node {selected}."
+            ),
+        },
+        {
+            "order": 4,
+            "type": "approval_boundary",
+            "description": (
+                "Stop before execution. "
+                "No command, SSH session, "
+                "Ansible playbook, deployment, "
+                "restart, or file modification "
+                "is performed by this plan."
+            ),
+        },
+    ]
+
+    return {
+        "plan_id": plan_id,
+        "mode": "PLAN",
+        "verdict": verdict,
+        "intent": intent,
+        "required_capabilities": required,
+        "selected": selected,
+        "placement": placement_result,
+        "validations": validations,
+        "steps": steps,
+        "execution": {
+            "performed": False,
+            "allowed": False,
+            "reason": (
+                "PLAN mode is strictly "
+                "non-executing."
+            ),
+        },
+        "contract": (
+            "This object describes an intended "
+            "action only. It must never be treated "
+            "as authorization to execute."
+        ),
+    }
+
 
 
 def load_runtime_context():

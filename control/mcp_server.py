@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 from mcp.server import MCPServer
 
 from control.core import (
+    build_plan,
     get_node,
     load_nodes,
     load_runtime_context,
@@ -129,6 +130,33 @@ def cluster_place_workload(
         runtime_nodes,
         runtime_info=runtime_info,
     )
+
+
+
+@mcp.tool()
+def cluster_plan_workload(
+    intent: str,
+    required_capabilities: list[str],
+) -> dict[str, Any]:
+    """Build a deterministic PLAN without executing anything.
+
+    This tool is non-executing. It never runs SSH, shell commands,
+    Ansible, deployments, restarts, service changes, or file writes.
+    The returned plan_id identifies the proposed plan only and is
+    not authorization to execute it.
+    """
+    nodes = load_nodes()
+
+    runtime_nodes, runtime_info = load_runtime_context()
+
+    return build_plan(
+        nodes,
+        intent,
+        required_capabilities,
+        runtime_nodes,
+        runtime_info=runtime_info,
+    )
+
 
 
 if __name__ == "__main__":

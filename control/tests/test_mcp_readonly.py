@@ -18,6 +18,7 @@ class MCPReadonlyContractTests(unittest.TestCase):
             "cluster_find_capability",
             "cluster_get_runtime_state",
             "cluster_place_workload",
+            "cluster_plan_workload",
         }
 
         source = SOURCE.read_text(
