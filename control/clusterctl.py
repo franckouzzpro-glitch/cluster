@@ -26,19 +26,8 @@ def active_capabilities(node):
     )
 
 
-def list_nodes(nodes):
-    for name, node in nodes.items():
-        roles = ", ".join(node.get("desired_roles", []))
-        print(f"{name:10} {node['address']:15} {node['platform']:8} {roles}")
-
-
-def show_node(nodes, name):
-    if name not in nodes:
-        raise SystemExit(f"Unknown node: {name}")
-
-    node = nodes[name]
-
-    result = {
+def node_summary(name, node):
+    return {
         "name": name,
         "address": node.get("address"),
         "platform": node.get("platform"),
@@ -47,26 +36,105 @@ def show_node(nodes, name):
         "observed": node.get("observed", {}),
     }
 
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+def print_json(data):
+    print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def find_capability(nodes, capability):
-    matches = []
+def list_nodes(nodes, as_json=False):
+    if as_json:
+        print_json([
+            node_summary(name, node)
+            for name, node in nodes.items()
+        ])
+        return
 
     for name, node in nodes.items():
-        if node.get("capabilities", {}).get(capability) is True:
-            matches.append(name)
+        roles = ", ".join(node.get("desired_roles", []))
+        print(f"{name:10} {node['address']:15} {node['platform']:8} {roles}")
+
+
+def show_node(nodes, name, as_json=False):
+    if name not in nodes:
+        raise SystemExit(f"Unknown node: {name}")
+
+    result = node_summary(name, nodes[name])
+
+    if as_json:
+        print_json(result)
+        return
+
+    print_json(result)
+
+
+def find_capability(nodes, capability, as_json=False):
+    matches = [
+        name
+        for name, node in nodes.items()
+        if node.get("capabilities", {}).get(capability) is True
+    ]
 
     if not matches:
         raise SystemExit(f"No node provides capability: {capability}")
+
+    if as_json:
+        print_json({
+            "capability": capability,
+            "matches": matches,
+        })
+        return
 
     for name in matches:
         print(name)
 
 
+def place(nodes, required_capabilities, as_json=False):
+    candidates = []
+
+    for name, node in nodes.items():
+        capabilities = node.get("capabilities", {})
+
+        if all(capabilities.get(capability) is True
+               for capability in required_capabilities):
+            candidates.append({
+                "name": name,
+                "address": node.get("address"),
+                "platform": node.get("platform"),
+                "capabilities": active_capabilities(node),
+            })
+
+    if not candidates:
+        raise SystemExit(
+            "No node satisfies required capabilities: "
+            + ", ".join(required_capabilities)
+        )
+
+    result = {
+        "required_capabilities": required_capabilities,
+        "candidates": candidates,
+        "selected": candidates[0]["name"],
+        "selection_policy": "first_matching_node",
+    }
+
+    if as_json:
+        print_json(result)
+        return
+
+    print(f"Selected: {result['selected']}")
+    print("Candidates:")
+    for candidate in candidates:
+        print(f"  - {candidate['name']}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Read-only cluster control layer"
+    )
+
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Return machine-readable JSON",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -78,21 +146,36 @@ def main():
 
     find_parser = sub.add_parser(
         "find",
-        help="Find nodes providing a capability"
+        help="Find nodes providing a capability",
     )
     find_parser.add_argument("capability")
+
+    place_parser = sub.add_parser(
+        "place",
+        help="Select nodes matching required capabilities",
+    )
+    place_parser.add_argument(
+        "--require",
+        action="append",
+        required=True,
+        dest="required_capabilities",
+        help="Required capability. May be repeated.",
+    )
 
     args = parser.parse_args()
     nodes = load_nodes()
 
     if args.command == "nodes":
-        list_nodes(nodes)
+        list_nodes(nodes, args.json)
 
     elif args.command == "node":
-        show_node(nodes, args.name)
+        show_node(nodes, args.name, args.json)
 
     elif args.command == "find":
-        find_capability(nodes, args.capability)
+        find_capability(nodes, args.capability, args.json)
+
+    elif args.command == "place":
+        place(nodes, args.required_capabilities, args.json)
 
 
 if __name__ == "__main__":
