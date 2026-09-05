@@ -1,0 +1,217 @@
+---
+cluster:
+  name: home-cluster
+
+  nodes:
+
+    nodenas:
+      address: 192.168.1.20
+      platform: linux
+
+      desired_roles:
+        - storage
+        - nextcloud
+        - backup-target
+
+      observed:
+        os:
+          family: debian
+          version: "13"
+
+        compute:
+          cpu:
+            model: "Intel Core i7-8700K"
+            physical_cores: 6
+            logical_threads: 12
+
+          memory_gb: 64
+
+          gpu:
+            vendor: intel
+            model: "UHD Graphics 630"
+            compute_class: none
+
+        storage:
+          software_raid: true
+
+          arrays:
+            md0:
+              level: raid5
+              members: 3
+              state: healthy
+              purpose: bulk-storage
+
+            md127:
+              level: raid10
+              members: 4
+              state: healthy
+              purpose: fast-storage
+
+            md1:
+              level: raid0
+              members: 2
+              state: active
+              purpose: unspecified
+
+        network:
+          primary_ip: 192.168.1.20
+          high_speed_nic: 10gbe
+
+        runtime:
+          docker: true
+          nvidia_cuda: false
+
+      capabilities:
+        cpu_worker: true
+        gpu_worker: false
+        docker_host: true
+        storage_provider: true
+        nfs_provider: true
+        backup_target: true
+        ansible_controller: false
+
+
+    nodecpu:
+      address: 192.168.1.21
+      platform: linux
+
+      desired_roles:
+        - control-plane
+        - cpu-worker
+        - management
+
+      observed:
+        os:
+          family: ubuntu
+          version: "26.04"
+
+        compute:
+          cpu:
+            model: "2x Intel Xeon E5-2630 v3"
+            sockets: 2
+            physical_cores: 16
+            logical_threads: 32
+
+          memory_gb: 128
+
+          gpu:
+            compute_class: none
+
+        storage:
+          system_controller: "Dell PERC H330 Mini"
+          local_nvme: true
+
+        network:
+          primary_ip: 192.168.1.21
+          high_speed_nic: 10gbe
+
+        runtime:
+          docker: true
+          ansible: true
+          nvidia_cuda: false
+
+      capabilities:
+        control_plane: true
+        cpu_worker: true
+        gpu_worker: false
+        docker_host: true
+        ansible_controller: true
+        storage_provider: false
+
+
+    nodegpu1:
+      address: 192.168.1.22
+      platform: linux
+
+      desired_roles:
+        - gpu-worker
+        - immich
+        - cuda-worker
+
+      observed:
+        os:
+          family: ubuntu
+          version: "26.04"
+
+        compute:
+          cpu:
+            model: "2x Intel Xeon E5-2680 v4"
+            sockets: 2
+            physical_cores: 28
+            logical_threads: 56
+
+          memory_gb: 128
+
+          gpu:
+            vendor: nvidia
+            model: "NVIDIA T1000 8GB"
+            vram_gb: 8
+            cuda: true
+
+        storage:
+          system_controller: "Dell PERC H730P Mini"
+
+        network:
+          primary_ip: 192.168.1.22
+          high_speed_nic: 10gbe
+
+        runtime:
+          docker: true
+          nvidia_cuda: true
+
+      capabilities:
+        cpu_worker: true
+        gpu_worker: true
+        cuda_worker: true
+        docker_host: true
+        storage_provider: false
+        ansible_controller: false
+
+
+    nodegpu2:
+      address: 192.168.1.161
+      platform: windows
+
+      desired_roles:
+        - gpu-worker
+        - workstation
+        - heavy-ai-worker
+
+      observed:
+        os:
+          family: windows
+          version: "11 Pro"
+
+        compute:
+          cpu:
+            model: "AMD Ryzen 9 3900XT"
+            physical_cores: 12
+            logical_threads: 24
+
+          memory_gb: 128
+
+          gpu:
+            vendor: nvidia
+            model: "NVIDIA GeForce RTX 5070"
+            vram_gb: 12
+            cuda: true
+
+        storage:
+          nvme_devices: 2
+
+        network:
+          primary_ip: 192.168.1.161
+          high_speed_nic: 10gbe
+
+        runtime:
+          docker: false
+          nvidia_cuda: true
+
+      capabilities:
+        cpu_worker: true
+        gpu_worker: true
+        heavy_gpu_worker: true
+        cuda_worker: true
+        docker_host: false
+        storage_provider: false
+        ansible_controller: false
