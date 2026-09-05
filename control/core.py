@@ -457,6 +457,166 @@ def sort_candidates(
     )
 
 
+
+def build_decision_trace(
+    ranked_candidates,
+    ranking_rules,
+    runtime_nodes,
+    inventory_index,
+):
+    """Explain which ranking criteria actually affected selection."""
+
+    names = [
+        item["name"]
+        for item in ranked_candidates
+    ]
+
+    if not names:
+        return {
+            "selected": None,
+            "decision_reasons": [],
+            "factors": [],
+        }
+
+    selected = names[0]
+    remaining = list(names)
+
+    factors = []
+    decision_reasons = []
+
+    rule_specs = {
+        "gpu_free_vram_desc": {
+            "direction": "desc",
+            "field": "vram_free_mb",
+        },
+        "gpu_utilization_asc": {
+            "direction": "asc",
+            "field": "utilization_percent",
+        },
+        "gpu_temperature_asc": {
+            "direction": "asc",
+            "field": "temperature_c",
+        },
+        "inventory_order": {
+            "direction": "asc",
+            "field": None,
+        },
+    }
+
+    for rule in ranking_rules:
+        spec = rule_specs.get(rule)
+
+        if spec is None:
+            factors.append(
+                {
+                    "criterion": rule,
+                    "outcome": "unsupported",
+                }
+            )
+            continue
+
+        if len(remaining) <= 1:
+            factors.append(
+                {
+                    "criterion": rule,
+                    "outcome": "not_needed",
+                    "leaders": list(remaining),
+                }
+            )
+            continue
+
+        values = {}
+
+        for name in remaining:
+            if rule == "inventory_order":
+                value = inventory_index[name]
+            else:
+                value = (
+                    runtime_nodes
+                    .get(name, {})
+                    .get("gpu", {})
+                    .get(spec["field"])
+                )
+
+            values[name] = value
+
+        if any(
+            value is None
+            for value in values.values()
+        ):
+            factors.append(
+                {
+                    "criterion": rule,
+                    "outcome": "unavailable",
+                    "values": values,
+                    "leaders": list(remaining),
+                }
+            )
+            continue
+
+        if spec["direction"] == "desc":
+            best_value = max(values.values())
+        else:
+            best_value = min(values.values())
+
+        leaders = [
+            name
+            for name, value in values.items()
+            if value == best_value
+        ]
+
+        if len(leaders) == len(remaining):
+            outcome = "tie"
+
+        elif len(leaders) == 1:
+            outcome = "decisive"
+
+        else:
+            outcome = "narrowed"
+
+        factor = {
+            "criterion": rule,
+            "direction": spec["direction"],
+            "outcome": outcome,
+            "values": values,
+            "best_value": best_value,
+            "leaders": leaders,
+        }
+
+        factors.append(factor)
+
+        if outcome in {
+            "decisive",
+            "narrowed",
+        }:
+            decision_reasons.append(
+                {
+                    "criterion": rule,
+                    "direction": spec["direction"],
+                    "selected_value": values.get(
+                        selected
+                    ),
+                    "compared_values": values,
+                    "outcome": outcome,
+                }
+            )
+
+            remaining = leaders
+
+    return {
+        "selected": selected,
+        "decision_reasons": decision_reasons,
+        "factors": factors,
+        "contract": (
+            "Only decision_reasons contributed "
+            "to the selected node. Factors marked "
+            "not_needed, tie, unavailable, or "
+            "unsupported must not be presented "
+            "as reasons for selection."
+        ),
+    }
+
+
 def place(
     nodes,
     required_capabilities,
@@ -677,6 +837,12 @@ def place(
             "age_seconds": runtime_age,
         },
         "ranking_policy": ranking_rules,
+        "decision": build_decision_trace(
+            candidates,
+            ranking_rules,
+            runtime_nodes,
+            inventory_index,
+        ),
         "candidates": candidates,
         "evaluations": evaluations,
     }
