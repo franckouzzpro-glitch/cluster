@@ -11,16 +11,25 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
 from control.core import load_nodes  # noqa: E402
+from control.diagnostics import (  # noqa: E402
+    classify_ansible_failure,
+    short_error_detail,
+)
 from control.state import save_state  # noqa: E402
 
 
 INVENTORY = ROOT / "ansible" / "inventory.yml"
 ANSIBLE_CONFIG = ROOT / "ansible" / "ansible.cfg"
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
 
 
 def run_command(command):
@@ -62,59 +71,70 @@ def run_ansible(host, module, args=None):
 
 
 def host_actually_ran(result, host):
-    """
-    Ansible may return rc=0 even when a host pattern matches nothing.
-    Require evidence that the requested host appeared in stdout.
-    """
-    if result["rc"] != 0:
-        return False
-
     return bool(
         re.search(
             rf"(?m)^{re.escape(host)}\s+\|",
-            result["stdout"],
+            result.get("stdout", ""),
         )
     )
 
 
 def extract_ansible_payload(result):
-    """
-    Extract command stdout from standard Ansible ad-hoc output.
+    stdout = result.get("stdout", "")
 
-    Typical form:
-
-        nodegpu1 | CHANGED | rc=0 >>
-        8192, 14, 8178, 48, 0
-    """
-    if ">>" not in result["stdout"]:
+    if ">>" not in stdout:
         return ""
 
-    return result["stdout"].split(">>", 1)[1].strip()
+    return stdout.split(">>", 1)[1].strip()
 
 
-def ansible_ping(host, platform):
-    if platform == "windows":
-        module = "ansible.windows.win_ping"
-    else:
-        module = "ansible.builtin.ping"
+def connectivity_status(host, platform):
+    module = (
+        "ansible.windows.win_ping"
+        if platform == "windows"
+        else "ansible.builtin.ping"
+    )
 
     result = run_ansible(
         host,
         module,
     )
 
+    success = (
+        result["rc"] == 0
+        and host_actually_ran(result, host)
+        and '"ping": "pong"' in result["stdout"]
+    )
+
+    if success:
+        return {
+            "reachable": True,
+            "connectivity": {
+                "status": "reachable",
+                "reason": "ok",
+            },
+        }
+
     return {
-        "reachable": host_actually_ran(
-            result,
-            host,
-        ),
-        "source": "ansible",
+        "reachable": False,
+        "connectivity": {
+            "status": "unreachable",
+            "reason": classify_ansible_failure(
+                result
+            ),
+            "detail": short_error_detail(
+                result
+            ),
+        },
     }
 
 
-def docker_available(host, platform):
+def docker_status(host, platform):
     if platform == "windows":
-        return False
+        return {
+            "available": False,
+            "reason": "not_declared",
+        }
 
     result = run_ansible(
         host,
@@ -122,31 +142,40 @@ def docker_available(host, platform):
         "command -v docker >/dev/null 2>&1",
     )
 
-    return (
-        host_actually_ran(result, host)
-        and result["rc"] == 0
-    )
+    if (
+        result["rc"] == 0
+        and host_actually_ran(result, host)
+    ):
+        return {
+            "available": True,
+            "reason": "ok",
+        }
+
+    return {
+        "available": False,
+        "reason": (
+            classify_ansible_failure(result)
+            if result["rc"] != 0
+            else "not_found"
+        ),
+    }
 
 
 def parse_gpu_csv(payload):
-    """
-    Parse:
-        total, used, free, temp, utilization
-    """
     if not payload:
-        return {
-            "available": False,
-        }
+        return None
 
-    for line in reversed(payload.splitlines()):
+    for line in reversed(
+        payload.splitlines()
+    ):
         line = line.strip()
 
         if not line:
             continue
 
         parts = [
-            part.strip()
-            for part in line.split(",")
+            item.strip()
+            for item in line.split(",")
         ]
 
         if len(parts) != 5:
@@ -161,7 +190,6 @@ def parse_gpu_csv(payload):
             continue
 
         return {
-            "available": True,
             "vram_total_mb": total,
             "vram_used_mb": used,
             "vram_free_mb": free,
@@ -169,53 +197,89 @@ def parse_gpu_csv(payload):
             "utilization_percent": util,
         }
 
-    return {
-        "available": False,
-    }
+    return None
 
 
-def nvidia_metrics_linux(host):
+def gpu_status_linux(host):
     result = run_ansible(
         host,
         "ansible.builtin.shell",
         (
             "nvidia-smi "
-            "--query-gpu=memory.total,memory.used,memory.free,"
-            "temperature.gpu,utilization.gpu "
+            "--query-gpu="
+            "memory.total,"
+            "memory.used,"
+            "memory.free,"
+            "temperature.gpu,"
+            "utilization.gpu "
             "--format=csv,noheader,nounits"
         ),
     )
 
-    if not host_actually_ran(result, host):
-        return {
-            "available": False,
-        }
-
-    return parse_gpu_csv(
+    metrics = parse_gpu_csv(
         extract_ansible_payload(result)
     )
 
+    if (
+        result["rc"] == 0
+        and host_actually_ran(result, host)
+        and metrics
+    ):
+        return {
+            "available": True,
+            "reason": "ok",
+            **metrics,
+        }
 
-def nvidia_metrics_windows(host):
+    return {
+        "available": False,
+        "reason": (
+            classify_ansible_failure(result)
+            if result["rc"] != 0
+            else "metrics_unavailable"
+        ),
+    }
+
+
+def gpu_status_windows(host):
     result = run_ansible(
         host,
         "ansible.windows.win_shell",
         (
             "nvidia-smi.exe "
-            "--query-gpu=memory.total,memory.used,memory.free,"
-            "temperature.gpu,utilization.gpu "
+            "--query-gpu="
+            "memory.total,"
+            "memory.used,"
+            "memory.free,"
+            "temperature.gpu,"
+            "utilization.gpu "
             "--format=csv,noheader,nounits"
         ),
     )
 
-    if not host_actually_ran(result, host):
-        return {
-            "available": False,
-        }
-
-    return parse_gpu_csv(
+    metrics = parse_gpu_csv(
         extract_ansible_payload(result)
     )
+
+    if (
+        result["rc"] == 0
+        and host_actually_ran(result, host)
+        and metrics
+    ):
+        return {
+            "available": True,
+            "reason": "ok",
+            **metrics,
+        }
+
+    return {
+        "available": False,
+        "reason": (
+            classify_ansible_failure(result)
+            if result["rc"] != 0
+            else "metrics_unavailable"
+        ),
+    }
 
 
 def collect_node_state(name, node):
@@ -223,43 +287,61 @@ def collect_node_state(name, node):
 
     state = {
         "reachable": False,
-        "last_seen": datetime.now(
-            timezone.utc
-        ).isoformat(),
+        "last_seen": now(),
+        "connectivity": {
+            "status": "unknown",
+            "reason": "not_checked",
+        },
         "docker_available": False,
+        "docker": {
+            "available": False,
+            "reason": "not_checked",
+        },
         "gpu": {
             "available": False,
+            "reason": "not_applicable",
         },
     }
 
-    ping = ansible_ping(
+    connection = connectivity_status(
         name,
         platform,
     )
 
-    state["reachable"] = ping["reachable"]
+    state.update(connection)
 
     if not state["reachable"]:
+        state["docker"]["reason"] = (
+            "node_unreachable"
+        )
+        state["gpu"]["reason"] = (
+            "node_unreachable"
+        )
         return state
 
-    state["docker_available"] = docker_available(
+    docker = docker_status(
         name,
         platform,
     )
 
-    if (
-        node
-        .get("capabilities", {})
-        .get("gpu_worker")
-        is True
-    ):
+    state["docker"] = docker
+    state["docker_available"] = (
+        docker["available"]
+    )
+
+    capabilities = node.get(
+        "capabilities",
+        {},
+    )
+
+    if capabilities.get("gpu_worker") is True:
         if platform == "windows":
-            state["gpu"] = nvidia_metrics_windows(
-                name
+            state["gpu"] = (
+                gpu_status_windows(name)
             )
         else:
-            state["gpu"] = nvidia_metrics_linux(
-                name
+            state["gpu"] = (
+                gpu_status_linux(name)
             )
 
     return state
@@ -268,47 +350,60 @@ def collect_node_state(name, node):
 def main():
     if not INVENTORY.exists():
         raise SystemExit(
-            f"Missing Ansible inventory: {INVENTORY}"
+            f"Missing Ansible inventory: "
+            f"{INVENTORY}"
         )
 
     if not ANSIBLE_CONFIG.exists():
         raise SystemExit(
-            f"Missing Ansible config: {ANSIBLE_CONFIG}"
+            f"Missing Ansible config: "
+            f"{ANSIBLE_CONFIG}"
         )
 
     nodes = load_nodes()
 
     data = {
         "cluster_state": {
-            "generated_at": datetime.now(
-                timezone.utc
-            ).isoformat(),
+            "schema_version": 2,
+            "generated_at": now(),
             "nodes": {},
         }
     }
 
     for name, node in nodes.items():
-        print(f"Collecting {name}...")
+        print(
+            f"Collecting {name}..."
+        )
 
-        data["cluster_state"]["nodes"][name] = (
-            collect_node_state(
-                name,
-                node,
-            )
+        data[
+            "cluster_state"
+        ][
+            "nodes"
+        ][
+            name
+        ] = collect_node_state(
+            name,
+            node,
         )
 
     save_state(data)
 
     print()
-    print("Runtime state written to:")
-    print("runtime/state.yml")
+    print(
+        "Runtime state written to:"
+    )
+    print(
+        "runtime/state.yml"
+    )
     print()
 
-    print(json.dumps(
-        data,
-        indent=2,
-        ensure_ascii=False,
-    ))
+    print(
+        json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":

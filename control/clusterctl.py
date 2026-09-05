@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -24,22 +25,28 @@ from control.core import (  # noqa: E402
 
 
 def print_json(data):
-    print(json.dumps(
-        data,
-        indent=2,
-        ensure_ascii=False,
-    ))
+    print(
+        json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Read-only Cluster Control Layer"
+        description=(
+            "Read-only Cluster Control Layer"
+        )
     )
 
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Return machine-readable JSON",
+        help=(
+            "Return machine-readable JSON"
+        ),
     )
 
     sub = parser.add_subparsers(
@@ -56,31 +63,59 @@ def main():
         "node",
         help="Show one node",
     )
-    node_parser.add_argument("name")
+    node_parser.add_argument(
+        "name"
+    )
 
     find_parser = sub.add_parser(
         "find",
-        help="Find nodes providing a capability",
+        help=(
+            "Find nodes providing "
+            "a capability"
+        ),
     )
-    find_parser.add_argument("capability")
+
+    find_parser.add_argument(
+        "capability"
+    )
 
     place_parser = sub.add_parser(
         "place",
-        help="Select nodes matching required capabilities",
+        help=(
+            "Select nodes matching "
+            "required capabilities"
+        ),
     )
+
     place_parser.add_argument(
         "--require",
         action="append",
         required=True,
-        dest="required_capabilities",
-        help="Required capability. May be repeated.",
+        dest=(
+            "required_capabilities"
+        ),
+        help=(
+            "Required capability. "
+            "May be repeated."
+        ),
+    )
+
+    place_parser.add_argument(
+        "--explain",
+        action="store_true",
+        help=(
+            "Show accepted and rejected "
+            "placement evaluations"
+        ),
     )
 
     args = parser.parse_args()
 
     try:
         nodes = load_nodes()
-        runtime_nodes = load_runtime_nodes()
+        runtime_nodes = (
+            load_runtime_nodes()
+        )
 
         if args.command == "nodes":
             result = list_nodes(
@@ -92,25 +127,46 @@ def main():
                 print_json(result)
             else:
                 for node in result:
-                    roles = ", ".join(
-                        node["desired_roles"]
-                    )
-
                     runtime = node.get(
                         "runtime",
                         {},
                     )
 
-                    reachable = runtime.get(
-                        "reachable",
-                        "unknown",
+                    connectivity = (
+                        runtime.get(
+                            "connectivity",
+                            {},
+                        )
+                    )
+
+                    reachable = (
+                        runtime.get(
+                            "reachable",
+                            "unknown",
+                        )
+                    )
+
+                    reason = (
+                        connectivity.get(
+                            "reason",
+                            "unknown",
+                        )
+                    )
+
+                    roles = ", ".join(
+                        node[
+                            "desired_roles"
+                        ]
                     )
 
                     print(
                         f"{node['name']:10} "
                         f"{node['address']:15} "
                         f"{node['platform']:8} "
-                        f"reachable={reachable!s:7} "
+                        f"reachable="
+                        f"{reachable!s:7} "
+                        f"reason="
+                        f"{reason:18} "
                         f"{roles}"
                     )
 
@@ -120,6 +176,7 @@ def main():
                 args.name,
                 runtime_nodes,
             )
+
             print_json(result)
 
         elif args.command == "find":
@@ -130,13 +187,16 @@ def main():
 
             if not matches:
                 raise ClusterError(
-                    f"No node provides capability: "
+                    "No node provides "
+                    "capability: "
                     f"{args.capability}"
                 )
 
             if args.json:
                 print_json({
-                    "capability": args.capability,
+                    "capability": (
+                        args.capability
+                    ),
                     "matches": matches,
                 })
             else:
@@ -154,20 +214,86 @@ def main():
                 print_json(result)
             else:
                 print(
-                    f"Selected: "
+                    "Selected: "
                     f"{result['selected']}"
                 )
+
                 print(
-                    f"Policy: "
+                    "Policy: "
                     f"{result['selection_policy']}"
                 )
+
+                print(
+                    "Ranking: "
+                    + " > ".join(
+                        result[
+                            "ranking_policy"
+                        ]
+                    )
+                )
+
                 print("Candidates:")
 
-                for candidate in result["candidates"]:
-                    print(
-                        f"  - {candidate['name']} "
-                        f"(score={candidate['score']})"
+                for candidate in (
+                    result["candidates"]
+                ):
+                    reasons = (
+                        ", ".join(
+                            candidate[
+                                "ranking_reasons"
+                            ]
+                        )
+                        or "stable-order"
                     )
+
+                    print(
+                        f"  {candidate['rank']}. "
+                        f"{candidate['name']} "
+                        f"[{reasons}]"
+                    )
+
+                if args.explain:
+                    print(
+                        "Evaluations:"
+                    )
+
+                    for item in (
+                        result[
+                            "evaluations"
+                        ]
+                    ):
+                        if item[
+                            "eligible"
+                        ]:
+                            status = (
+                                "ELIGIBLE"
+                            )
+                            detail = (
+                                ", ".join(
+                                    item[
+                                        "ranking_reasons"
+                                    ]
+                                )
+                                or "accepted"
+                            )
+                        else:
+                            status = (
+                                "REJECTED"
+                            )
+                            detail = (
+                                ", ".join(
+                                    item[
+                                        "rejection_reasons"
+                                    ]
+                                )
+                            )
+
+                        print(
+                            f"  - "
+                            f"{item['name']}: "
+                            f"{status} "
+                            f"[{detail}]"
+                        )
 
     except ClusterError as exc:
         if args.json:
