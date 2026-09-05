@@ -51,7 +51,7 @@ Allowed tools:
 - cluster_place_workload
 - cluster_plan_workload
 
-Resources and prompts are disabled.
+No cluster-specific MCP resources or prompts are exposed. Hermes may register generic MCP protocol adapters for `list_resources`, `read_resource`, `list_prompts`, and `get_prompt`; these adapters do not grant cluster mutation or execution authority.
 
 ## Hermes CLI tool boundary
 
@@ -141,3 +141,62 @@ It is an application/tool boundary, not an operating-system sandbox.
 A future stronger isolation layer may run the agent under a dedicated
 Unix account or container with independent filesystem and network
 restrictions.
+
+## V1.2 facts and provenance contract
+
+Hermes should prefer `cluster_get_facts` when making factual claims
+about hardware, declared capabilities, and runtime observations.
+
+Facts have explicit provenance:
+
+- `inventory`: declared inventory value;
+- `runtime`: observed value from a runtime snapshot;
+- `derived`: deterministic value calculated by the Cluster Control Layer.
+
+The LLM must not recalculate inventory fields such as
+`physical_cores` or `logical_threads`.
+
+`desired_roles` expresses declared intent. It is not proof that the
+corresponding service is currently running.
+
+For GPU memory, raw `total`, `used`, and `free` observations are kept
+independently. Percentages and accounting gaps are calculated by the
+control layer. The LLM must not infer one raw metric from another.
+
+Facts provide context only. They are not causal placement evidence.
+Only `placement.decision.decision_reasons` may be described as reasons
+why a workload was selected for a node.
+
+PLACE/PLAN failures returned by the MCP facade are structured. The
+LLM may state only the cause information explicitly present in the
+returned error and must not invent an additional cause.
+
+The execution boundary remains unchanged: READ, PLACE, PLAN only.
+No execution authority exists.
+
+### Node-scoped factual binding
+
+For factual claims about one specific node, Hermes should prefer
+`cluster_get_node_facts(name)` over the cluster-wide facts view.
+
+The node-scoped response binds every returned fact to exactly one
+node identity. This prevents facts from adjacent nodes from being
+associated with the wrong node by the LLM.
+
+`cluster_get_facts` remains available for cluster-wide context.
+
+### V1.2 business MCP tool set
+
+The Cluster Control Layer exposes eight business tools:
+
+- `cluster_list_nodes`
+- `cluster_get_node`
+- `cluster_find_capability`
+- `cluster_get_runtime_state`
+- `cluster_get_facts`
+- `cluster_get_node_facts`
+- `cluster_place_workload`
+- `cluster_plan_workload`
+
+Hermes may additionally display generic protocol adapter tools.
+Those adapters are not additional cluster-control capabilities.

@@ -17,6 +17,8 @@ class MCPReadonlyContractTests(unittest.TestCase):
             "cluster_get_node",
             "cluster_find_capability",
             "cluster_get_runtime_state",
+            "cluster_get_facts",
+            "cluster_get_node_facts",
             "cluster_place_workload",
             "cluster_plan_workload",
         }
