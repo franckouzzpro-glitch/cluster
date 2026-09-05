@@ -1,0 +1,66 @@
+---
+- name: Audit Linux storage and network
+  hosts: linux_nodes:control_plane
+  gather_facts: true
+
+  tasks:
+    - name: Show Linux storage and network summary
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ ansible_facts['hostname'] }}"
+          - "Default IPv4: {{ ansible_facts['default_ipv4']['address'] | default('unknown') }}"
+          - "Default interface: {{ ansible_facts['default_ipv4']['interface'] | default('unknown') }}"
+          - "Root total: {{ ((ansible_facts['mounts'] | selectattr('mount', 'equalto', '/') | map(attribute='size_total') | first | default(0)) / 1073741824) | round(1) }} GiB"
+          - "Root free: {{ ((ansible_facts['mounts'] | selectattr('mount', 'equalto', '/') | map(attribute='size_available') | first | default(0)) / 1073741824) | round(1) }} GiB"
+          - "Interfaces: {{ ansible_facts['interfaces'] | join(', ') }}"
+
+    - name: Collect Linux block devices
+      ansible.builtin.command:
+        cmd: lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL
+      register: linux_lsblk
+      changed_when: false
+
+    - name: Show Linux block devices
+      ansible.builtin.debug:
+        var: linux_lsblk.stdout_lines
+
+- name: Audit Windows storage and network
+  hosts: windows_nodes
+  gather_facts: false
+
+  tasks:
+    - name: Collect Windows storage and network
+      ansible.windows.win_shell: |
+        Write-Output "=== NETWORK ==="
+        Get-NetIPConfiguration |
+          Where-Object { $_.IPv4Address } |
+          ForEach-Object {
+            Write-Output ("Interface: " + $_.InterfaceAlias)
+            Write-Output ("IPv4: " + $_.IPv4Address.IPAddress)
+            if ($_.IPv4DefaultGateway) {
+              Write-Output ("Gateway: " + $_.IPv4DefaultGateway.NextHop)
+            }
+          }
+
+        Write-Output ""
+        Write-Output "=== DISKS ==="
+        Get-Volume |
+          Where-Object { $_.DriveLetter } |
+          Select-Object DriveLetter,FileSystemLabel,FileSystem,
+            @{Name='SizeGiB';Expression={[math]::Round($_.Size / 1GB,1)}},
+            @{Name='FreeGiB';Expression={[math]::Round($_.SizeRemaining / 1GB,1)}} |
+          Format-Table -AutoSize
+
+        Write-Output ""
+        Write-Output "=== PHYSICAL DISKS ==="
+        Get-PhysicalDisk |
+          Select-Object FriendlyName,MediaType,
+            @{Name='SizeGiB';Expression={[math]::Round($_.Size / 1GB,1)}},
+            HealthStatus |
+          Format-Table -AutoSize
+      register: windows_storage_network
+      changed_when: false
+
+    - name: Show Windows storage and network
+      ansible.builtin.debug:
+        var: windows_storage_network.stdout_lines
