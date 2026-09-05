@@ -1,0 +1,42 @@
+---
+- name: Audit Linux nodes and control plane
+  hosts: linux_nodes:control_plane
+  gather_facts: true
+
+  tasks:
+    - name: Show Linux summary
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ ansible_facts['hostname'] }}"
+          - "OS: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+          - "Kernel: {{ ansible_facts['kernel'] }}"
+          - "Architecture: {{ ansible_facts['architecture'] }}"
+          - "CPU: {{ ansible_facts['processor_vcpus'] }} vCPU"
+          - "RAM: {{ ansible_facts['memtotal_mb'] }} MB"
+          - "Root filesystem: {{ ansible_facts['mounts'] | selectattr('mount', 'equalto', '/') | map(attribute='size_total') | first | default('unknown') }} bytes"
+
+- name: Audit Windows nodes
+  hosts: windows_nodes
+  gather_facts: false
+
+  tasks:
+    - name: Collect Windows summary
+      ansible.windows.win_shell: |
+        $os = Get-CimInstance Win32_OperatingSystem
+        $computer = Get-CimInstance Win32_ComputerSystem
+        $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+
+        Write-Output "Host: $env:COMPUTERNAME"
+        Write-Output "OS: $($os.Caption)"
+        Write-Output "Version: $($os.Version)"
+        Write-Output "Last boot: $($os.LastBootUpTime)"
+        Write-Output "Logical processors: $($computer.NumberOfLogicalProcessors)"
+        Write-Output "RAM bytes: $($computer.TotalPhysicalMemory)"
+        Write-Output "C: total bytes: $($disk.Size)"
+        Write-Output "C: free bytes: $($disk.FreeSpace)"
+      register: windows_audit
+      changed_when: false
+
+    - name: Show Windows summary
+      ansible.builtin.debug:
+        var: windows_audit.stdout_lines

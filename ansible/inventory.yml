@@ -1,6 +1,11 @@
 all:
   children:
 
+    control_plane:
+      hosts:
+        nodecpu:
+          ansible_connection: local
+
     linux_nodes:
       hosts:
         nodenas:
