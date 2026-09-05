@@ -1,0 +1,26 @@
+all:
+  children:
+
+    linux_nodes:
+      hosts:
+        nodenas:
+          ansible_host: 192.168.1.20
+          ansible_user: root
+
+        nodegpu1:
+          ansible_host: 192.168.1.22
+          ansible_user: franck
+
+      vars:
+        ansible_ssh_private_key_file: ~/.ssh/id_ed25519_cluster_ansible
+
+    windows_nodes:
+      hosts:
+        nodegpu2:
+          ansible_host: 192.168.1.161
+          ansible_user: aigle
+          ansible_connection: ssh
+          ansible_shell_type: cmd
+
+      vars:
+        ansible_ssh_private_key_file: ~/.ssh/id_ed25519_cluster_ansible
