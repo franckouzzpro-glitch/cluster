@@ -1,0 +1,24 @@
+# Secrets and credentials
+*.key
+*.pem
+*.p12
+*.pfx
+*.token
+.env
+.env.*
+secrets/
+credentials/
+
+# SSH private keys
+id_rsa
+id_ed25519
+id_ecdsa
+
+# Temporary files
+*.tmp
+*.log
+*~
+.DS_Store
+
+# Ansible runtime
+*.retry
