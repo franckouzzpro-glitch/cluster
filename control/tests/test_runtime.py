@@ -33,6 +33,7 @@ class RuntimePlacementTests(unittest.TestCase):
             self.nodes,
             ["cuda_worker"],
             runtime,
+            runtime_info={"age_seconds": 1},
         )
 
         self.assertEqual(
@@ -64,6 +65,7 @@ class RuntimePlacementTests(unittest.TestCase):
             self.nodes,
             ["cuda_worker"],
             runtime,
+            runtime_info={"age_seconds": 1},
         )
 
         self.assertEqual(

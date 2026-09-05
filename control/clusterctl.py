@@ -19,7 +19,7 @@ from control.core import (  # noqa: E402
     get_node,
     list_nodes,
     load_nodes,
-    load_runtime_nodes,
+    load_runtime_context,
     place,
 )
 
@@ -113,14 +113,15 @@ def main():
 
     try:
         nodes = load_nodes()
-        runtime_nodes = (
-            load_runtime_nodes()
+        runtime_nodes, runtime_info = (
+            load_runtime_context()
         )
 
         if args.command == "nodes":
             result = list_nodes(
                 nodes,
                 runtime_nodes,
+                runtime_info=runtime_info,
             )
 
             if args.json:
@@ -208,6 +209,7 @@ def main():
                 nodes,
                 args.required_capabilities,
                 runtime_nodes,
+                runtime_info=runtime_info,
             )
 
             if args.json:

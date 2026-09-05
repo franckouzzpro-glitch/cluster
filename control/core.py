@@ -4,7 +4,14 @@ from pathlib import Path
 
 import yaml
 
-from control.state import load_state
+from control.policy import (
+    PolicyError,
+    load_policy,
+)
+from control.state import (
+    load_state,
+    runtime_metadata,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,14 +188,15 @@ def evaluate_candidate(
     node,
     required,
     runtime_state,
-    runtime_enabled,
+    runtime_usable,
+    policy,
 ):
     capabilities = node.get(
         "capabilities",
         {},
     )
 
-    missing_capabilities = [
+    missing = [
         capability
         for capability in required
         if capabilities.get(
@@ -210,32 +218,52 @@ def evaluate_candidate(
         "runtime": runtime_state,
     }
 
-    if missing_capabilities:
+    if missing:
         result["eligible"] = False
         result[
             "rejection_reasons"
         ].append(
             "missing_capabilities="
-            + ",".join(
-                missing_capabilities
-            )
+            + ",".join(missing)
         )
 
         return result
 
-    if not runtime_enabled:
-        result[
-            "ranking_reasons"
-        ].append(
-            "runtime_state_not_available"
-        )
-
-        return result
+    runtime_policy = policy.get(
+        "runtime",
+        {},
+    )
 
     if (
-        runtime_state
-        .get("reachable")
-        is not True
+        runtime_policy.get(
+            "required",
+            True,
+        )
+        and not runtime_usable
+    ):
+        result["eligible"] = False
+        result[
+            "rejection_reasons"
+        ].append(
+            "runtime_state_unusable"
+        )
+
+        return result
+
+    eligibility = policy.get(
+        "eligibility",
+        {},
+    )
+
+    if (
+        runtime_usable
+        and eligibility.get(
+            "require_reachable",
+            True,
+        )
+        and runtime_state.get(
+            "reachable"
+        ) is not True
     ):
         reason = (
             runtime_state
@@ -258,15 +286,20 @@ def evaluate_candidate(
 
         return result
 
-    if "docker_host" in required:
+    if (
+        "docker_host" in required
+        and eligibility.get(
+            "require_runtime_docker_for_docker_jobs",
+            True,
+        )
+    ):
         if (
-            runtime_state
-            .get(
+            not runtime_usable
+            or runtime_state.get(
                 "docker_available"
-            )
-            is not True
+            ) is not True
         ):
-            docker_reason = (
+            reason = (
                 runtime_state
                 .get(
                     "docker",
@@ -283,18 +316,27 @@ def evaluate_candidate(
                 "rejection_reasons"
             ].append(
                 "docker_unavailable:"
-                f"{docker_reason}"
+                f"{reason}"
             )
 
-    if is_gpu_request(required):
+    if (
+        is_gpu_request(required)
+        and eligibility.get(
+            "require_runtime_gpu_for_gpu_jobs",
+            True,
+        )
+    ):
         gpu = runtime_state.get(
             "gpu",
             {},
         )
 
-        if gpu.get(
-            "available"
-        ) is not True:
+        if (
+            not runtime_usable
+            or gpu.get(
+                "available"
+            ) is not True
+        ):
             result["eligible"] = False
             result[
                 "rejection_reasons"
@@ -305,22 +347,56 @@ def evaluate_candidate(
                     "unknown",
                 )
             )
-        else:
+
+            return result
+
+        max_temp = (
+            policy
+            .get("gpu", {})
+            .get("limits", {})
+            .get(
+                "max_temperature_c"
+            )
+        )
+
+        temperature = gpu.get(
+            "temperature_c"
+        )
+
+        if (
+            max_temp is not None
+            and temperature is not None
+            and temperature > max_temp
+        ):
+            result["eligible"] = False
             result[
-                "ranking_reasons"
-            ].extend([
-                "gpu_free_vram_mb="
-                f"{gpu.get('vram_free_mb', 0)}",
-                "gpu_utilization_percent="
-                f"{gpu.get('utilization_percent', 100)}",
-                "gpu_temperature_c="
-                f"{gpu.get('temperature_c', 999)}",
-            ])
+                "rejection_reasons"
+            ].append(
+                "gpu_temperature_limit:"
+                f"{temperature}>{max_temp}"
+            )
+
+            return result
+
+        result[
+            "ranking_reasons"
+        ].extend([
+            "gpu_free_vram_mb="
+            f"{gpu.get('vram_free_mb', 0)}",
+            "gpu_utilization_percent="
+            f"{gpu.get('utilization_percent', 100)}",
+            "gpu_temperature_c="
+            f"{gpu.get('temperature_c', 999)}",
+        ])
 
     return result
 
 
-def gpu_sort_key(candidate):
+def ranking_value(
+    candidate,
+    rule,
+    inventory_index,
+):
     gpu = (
         candidate
         .get(
@@ -333,18 +409,49 @@ def gpu_sort_key(candidate):
         )
     )
 
-    return (
-        -gpu.get(
+    if rule == "gpu_free_vram_desc":
+        return -gpu.get(
             "vram_free_mb",
             0,
-        ),
-        gpu.get(
+        )
+
+    if rule == "gpu_utilization_asc":
+        return gpu.get(
             "utilization_percent",
             100,
-        ),
-        gpu.get(
+        )
+
+    if rule == "gpu_temperature_asc":
+        return gpu.get(
             "temperature_c",
             999,
+        )
+
+    if rule == "inventory_order":
+        return inventory_index[
+            candidate["name"]
+        ]
+
+    raise PolicyError(
+        f"Unsupported ranking rule: {rule}"
+    )
+
+
+def sort_candidates(
+    candidates,
+    ranking_rules,
+    inventory_index,
+):
+    return sorted(
+        candidates,
+        key=lambda candidate: tuple(
+            ranking_value(
+                candidate,
+                rule,
+                inventory_index,
+            )
+            for rule
+            in ranking_rules
         ),
     )
 
@@ -353,6 +460,8 @@ def place(
     nodes,
     required_capabilities,
     runtime_nodes=None,
+    policy=None,
+    runtime_info=None,
 ):
     required = list(
         dict.fromkeys(
@@ -360,12 +469,42 @@ def place(
         )
     )
 
+    policy = policy or load_policy()
+
     runtime_nodes = (
         runtime_nodes or {}
     )
 
-    runtime_enabled = bool(
+    runtime_info = (
+        runtime_info or {}
+    )
+
+    runtime_policy = policy.get(
+        "runtime",
+        {},
+    )
+
+    max_age = runtime_policy.get(
+        "max_age_seconds",
+        300,
+    )
+
+    runtime_age = runtime_info.get(
+        "age_seconds"
+    )
+
+    runtime_present = bool(
         runtime_nodes
+    )
+
+    runtime_fresh = (
+        runtime_age is not None
+        and runtime_age <= max_age
+    )
+
+    runtime_usable = (
+        runtime_present
+        and runtime_fresh
     )
 
     evaluations = []
@@ -379,7 +518,8 @@ def place(
                 name,
                 {},
             ),
-            runtime_enabled,
+            runtime_usable,
+            policy,
         )
 
         evaluations.append(
@@ -426,6 +566,15 @@ def place(
             + ", ".join(required)
         )
 
+        if not runtime_present:
+            message += (
+                " [runtime state missing]"
+            )
+        elif not runtime_fresh:
+            message += (
+                " [runtime state stale]"
+            )
+
         if details:
             message += (
                 f" ({details})"
@@ -435,29 +584,41 @@ def place(
             message
         )
 
-    if (
-        runtime_enabled
-        and is_gpu_request(required)
-    ):
-        eligible.sort(
-            key=gpu_sort_key
+    if is_gpu_request(required):
+        ranking_rules = (
+            policy
+            .get("gpu", {})
+            .get(
+                "ranking",
+                [
+                    "gpu_free_vram_desc",
+                    "gpu_utilization_asc",
+                    "gpu_temperature_asc",
+                    "inventory_order",
+                ],
+            )
+        )
+    else:
+        ranking_rules = (
+            policy
+            .get("general", {})
+            .get(
+                "ranking",
+                ["inventory_order"],
+            )
         )
 
-        ranking_policy = [
-            "required_capabilities",
-            "reachable",
-            "runtime_gpu_available",
-            "gpu_free_vram_desc",
-            "gpu_utilization_asc",
-            "gpu_temperature_asc",
-            "inventory_order",
-        ]
-    else:
-        ranking_policy = [
-            "required_capabilities",
-            "reachable_if_runtime_available",
-            "inventory_order",
-        ]
+    inventory_index = {
+        name: index
+        for index, name
+        in enumerate(nodes)
+    }
+
+    eligible = sort_candidates(
+        eligible,
+        ranking_rules,
+        inventory_index,
+    )
 
     candidates = []
 
@@ -467,6 +628,7 @@ def place(
     ):
         candidate = dict(item)
         candidate["rank"] = index
+
         candidates.append(
             candidate
         )
@@ -479,20 +641,42 @@ def place(
             candidates[0]["name"]
         ),
         "selection_policy": (
-            "runtime-policy-v1"
+            "policy-as-data-v1"
         ),
-        "ranking_policy": (
-            ranking_policy
-        ),
+        "policy": {
+            "runtime_required": (
+                runtime_policy.get(
+                    "required",
+                    True,
+                )
+            ),
+            "runtime_max_age_seconds": (
+                max_age
+            ),
+            "gpu_max_temperature_c": (
+                policy
+                .get("gpu", {})
+                .get("limits", {})
+                .get(
+                    "max_temperature_c"
+                )
+            ),
+        },
+        "runtime": {
+            "present": runtime_present,
+            "fresh": runtime_fresh,
+            "age_seconds": runtime_age,
+        },
+        "ranking_policy": ranking_rules,
         "candidates": candidates,
         "evaluations": evaluations,
     }
 
 
-def load_runtime_nodes():
+def load_runtime_context():
     state = load_state()
 
-    return (
+    nodes = (
         state
         .get(
             "cluster_state",
@@ -503,3 +687,14 @@ def load_runtime_nodes():
             {},
         )
     )
+
+    return (
+        nodes,
+        runtime_metadata(state),
+    )
+
+
+def load_runtime_nodes():
+    nodes, _ = load_runtime_context()
+
+    return nodes

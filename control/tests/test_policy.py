@@ -43,6 +43,7 @@ class PlacementPolicyTests(unittest.TestCase):
             self.nodes,
             ["cuda_worker"],
             runtime,
+            runtime_info={"age_seconds": 1},
         )
 
         self.assertEqual(
@@ -77,6 +78,7 @@ class PlacementPolicyTests(unittest.TestCase):
             self.nodes,
             ["cuda_worker"],
             runtime,
+            runtime_info={"age_seconds": 1},
         )
 
         self.assertEqual(
@@ -140,6 +142,7 @@ class PlacementPolicyTests(unittest.TestCase):
             self.nodes,
             ["cuda_worker"],
             runtime,
+            runtime_info={"age_seconds": 1},
         )
 
         nodegpu1 = next(

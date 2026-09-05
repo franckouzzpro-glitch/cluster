@@ -48,9 +48,24 @@ class ClusterCoreTests(unittest.TestCase):
         )
 
     def test_heavy_gpu_placement(self):
+        runtime = {
+            "nodegpu2": {
+                "reachable": True,
+                "gpu": {
+                    "available": True,
+                    "reason": "ok",
+                    "vram_free_mb": 1000,
+                    "utilization_percent": 0,
+                    "temperature_c": 40,
+                },
+            },
+        }
+
         result = place(
             self.nodes,
             ["heavy_gpu_worker"],
+            runtime,
+            runtime_info={"age_seconds": 1},
         )
 
         self.assertEqual(
@@ -59,9 +74,29 @@ class ClusterCoreTests(unittest.TestCase):
         )
 
     def test_docker_cuda_placement(self):
+        runtime = {
+            "nodegpu1": {
+                "reachable": True,
+                "docker_available": True,
+                "docker": {
+                    "available": True,
+                    "reason": "ok",
+                },
+                "gpu": {
+                    "available": True,
+                    "reason": "ok",
+                    "vram_free_mb": 7000,
+                    "utilization_percent": 0,
+                    "temperature_c": 40,
+                },
+            },
+        }
+
         result = place(
             self.nodes,
             ["docker_host", "cuda_worker"],
+            runtime,
+            runtime_info={"age_seconds": 1},
         )
 
         self.assertEqual(
