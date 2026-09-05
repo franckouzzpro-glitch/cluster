@@ -1,0 +1,125 @@
+---
+- name: Audit Linux temperatures, RAID and storage health
+  hosts: linux_nodes:control_plane
+  gather_facts: false
+
+  tasks:
+    - name: Collect lm-sensors output
+      ansible.builtin.command: sensors
+      register: sensors_out
+      changed_when: false
+      failed_when: false
+
+    - name: Collect Linux software RAID status
+      ansible.builtin.command: cat /proc/mdstat
+      register: mdstat_out
+      changed_when: false
+      failed_when: false
+
+    - name: Collect mdadm scan
+      ansible.builtin.command: mdadm --detail --scan
+      register: mdadm_scan
+      changed_when: false
+      failed_when: false
+
+    - name: Collect NVMe health
+      ansible.builtin.shell: |
+        set -o pipefail
+        if command -v nvme >/dev/null 2>&1; then
+          for d in /dev/nvme*n1; do
+            [ -e "$d" ] || continue
+            echo "=== $d ==="
+            nvme smart-log "$d" 2>&1 || true
+          done
+        else
+          echo "nvme command not available"
+        fi
+      args:
+        executable: /bin/bash
+      register: nvme_health
+      changed_when: false
+      failed_when: false
+
+    - name: Collect SMART summaries
+      ansible.builtin.shell: |
+        set -o pipefail
+        if command -v smartctl >/dev/null 2>&1; then
+          for d in /dev/sd?; do
+            [ -b "$d" ] || continue
+            echo "=== $d ==="
+            smartctl -H -A "$d" 2>&1 || true
+          done
+        else
+          echo "smartctl command not available"
+        fi
+      args:
+        executable: /bin/bash
+      register: smart_health
+      changed_when: false
+      failed_when: false
+
+    - name: Collect NVIDIA thermal status
+      ansible.builtin.command:
+        argv:
+          - nvidia-smi
+          - --query-gpu=name,temperature.gpu,power.draw,fan.speed
+          - --format=csv,noheader
+      register: nvidia_thermal
+      changed_when: false
+      failed_when: false
+
+    - name: Show Linux health summary
+      ansible.builtin.debug:
+        msg:
+          - "=== SENSORS ==="
+          - "{{ sensors_out.stdout_lines if sensors_out.rc == 0 else ['sensors not available'] }}"
+          - "=== MDSTAT ==="
+          - "{{ mdstat_out.stdout_lines if mdstat_out.rc == 0 else ['mdstat not available'] }}"
+          - "=== MDADM ==="
+          - "{{ mdadm_scan.stdout_lines if mdadm_scan.rc == 0 else ['mdadm not available or no arrays'] }}"
+          - "=== NVME ==="
+          - "{{ nvme_health.stdout_lines }}"
+          - "=== SMART ==="
+          - "{{ smart_health.stdout_lines }}"
+          - "=== NVIDIA THERMAL ==="
+          - "{{ nvidia_thermal.stdout_lines if nvidia_thermal.rc == 0 else ['NVIDIA GPU not available'] }}"
+
+- name: Audit Windows temperatures and storage health
+  hosts: windows_nodes
+  gather_facts: false
+
+  tasks:
+    - name: Collect Windows storage health
+      ansible.windows.win_shell: |
+        Write-Output "=== PHYSICAL DISKS ==="
+        Get-PhysicalDisk |
+          Select-Object FriendlyName,MediaType,HealthStatus,OperationalStatus |
+          Format-Table -AutoSize
+
+        Write-Output ""
+        Write-Output "=== STORAGE RELIABILITY ==="
+        try {
+          Get-PhysicalDisk | Get-StorageReliabilityCounter |
+            Select-Object DeviceId,Temperature,Wear,ReadErrorsTotal,WriteErrorsTotal |
+            Format-Table -AutoSize
+        }
+        catch {
+          Write-Output "Storage reliability counters not available"
+        }
+
+        Write-Output ""
+        Write-Output "=== NVIDIA THERMAL ==="
+        $smi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+        if ($smi) {
+          nvidia-smi --query-gpu=name,temperature.gpu,power.draw,fan.speed --format=csv,noheader
+        }
+        else {
+          Write-Output "nvidia-smi not available"
+        }
+      register: windows_health
+      changed_when: false
+      failed_when: false
+
+    - name: Show Windows health summary
+      ansible.builtin.debug:
+        var: windows_health.stdout_lines
