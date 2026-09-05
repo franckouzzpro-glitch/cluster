@@ -1,0 +1,38 @@
+---
+- name: Audit Dell PERC tooling
+  hosts: control_plane:linux_nodes
+  gather_facts: false
+
+  tasks:
+    - name: Detect Dell / LSI RAID tools
+      ansible.builtin.shell: |
+        for cmd in perccli storcli omreport megacli MegaCli64; do
+          if command -v "$cmd" >/dev/null 2>&1; then
+            echo "$cmd=$(command -v "$cmd")"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: perc_tools
+      changed_when: false
+      failed_when: false
+
+    - name: Detect PERC hardware from PCI
+      ansible.builtin.shell: |
+        if command -v lspci >/dev/null 2>&1; then
+          lspci | grep -Ei 'RAID|PERC|MegaRAID|SAS' || true
+        else
+          echo "lspci not available"
+        fi
+      args:
+        executable: /bin/bash
+      register: perc_pci
+      changed_when: false
+      failed_when: false
+
+    - name: Show Dell PERC audit
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "Tools: {{ perc_tools.stdout_lines if perc_tools.stdout_lines else ['none detected'] }}"
+          - "PCI: {{ perc_pci.stdout_lines if perc_pci.stdout_lines else ['no RAID controller detected'] }}"
