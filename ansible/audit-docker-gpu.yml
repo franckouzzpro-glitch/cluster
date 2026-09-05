@@ -1,0 +1,82 @@
+---
+- name: Audit Docker and GPU on Linux
+  hosts: linux_nodes:control_plane
+  gather_facts: false
+
+  tasks:
+    - name: Check Docker
+      ansible.builtin.command: docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}'
+      register: docker_version
+      changed_when: false
+      failed_when: false
+
+    - name: List Docker containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - -a
+          - --format
+          - "table {{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}"
+      register: docker_containers
+      changed_when: false
+      failed_when: false
+      when: docker_version.rc == 0
+
+    - name: Check NVIDIA GPU
+      ansible.builtin.command:
+        argv:
+          - nvidia-smi
+          - --query-gpu=name,driver_version,memory.total,memory.used,temperature.gpu,utilization.gpu
+          - --format=csv,noheader
+      register: nvidia_gpu
+      changed_when: false
+      failed_when: false
+
+    - name: Show Linux Docker and GPU summary
+      ansible.builtin.debug:
+        msg:
+          - "Docker: {{ docker_version.stdout if docker_version.rc == 0 else 'not available' }}"
+          - "Containers: {{ docker_containers.stdout_lines | default(['not available']) }}"
+          - "NVIDIA GPU: {{ nvidia_gpu.stdout_lines if nvidia_gpu.rc == 0 else ['not available'] }}"
+
+- name: Audit Docker and GPU on Windows
+  hosts: windows_nodes
+  gather_facts: false
+
+  tasks:
+    - name: Collect Windows Docker and NVIDIA information
+      ansible.windows.win_shell: |
+        Write-Output "=== DOCKER ==="
+
+        $docker = Get-Command docker.exe -ErrorAction SilentlyContinue
+        if ($docker) {
+            try {
+                docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}'
+                docker ps -a --format 'table {{ "{{" }}.Names{{ "}}" }}\t{{ "{{" }}.Image{{ "}}" }}\t{{ "{{" }}.Status{{ "}}" }}'
+            }
+            catch {
+                Write-Output "Docker command available but engine unavailable"
+            }
+        }
+        else {
+            Write-Output "Docker not available"
+        }
+
+        Write-Output ""
+        Write-Output "=== NVIDIA GPU ==="
+
+        $smi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+        if ($smi) {
+            nvidia-smi --query-gpu=name,driver_version,memory.total,memory.used,temperature.gpu,utilization.gpu --format=csv,noheader
+        }
+        else {
+            Write-Output "nvidia-smi not available"
+        }
+      register: windows_docker_gpu
+      changed_when: false
+      failed_when: false
+
+    - name: Show Windows Docker and GPU summary
+      ansible.builtin.debug:
+        var: windows_docker_gpu.stdout_lines
