@@ -22,3 +22,10 @@ id_ecdsa
 
 # Ansible runtime
 *.retry
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Runtime observations
+runtime/state.yml

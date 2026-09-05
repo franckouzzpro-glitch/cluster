@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 
-# Allow execution as ./control/clusterctl.py from the repository root.
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -19,12 +18,17 @@ from control.core import (  # noqa: E402
     get_node,
     list_nodes,
     load_nodes,
+    load_runtime_nodes,
     place,
 )
 
 
 def print_json(data):
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    print(json.dumps(
+        data,
+        indent=2,
+        ensure_ascii=False,
+    ))
 
 
 def main():
@@ -38,7 +42,10 @@ def main():
         help="Return machine-readable JSON",
     )
 
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+    )
 
     sub.add_parser(
         "nodes",
@@ -73,32 +80,58 @@ def main():
 
     try:
         nodes = load_nodes()
+        runtime_nodes = load_runtime_nodes()
 
         if args.command == "nodes":
-            result = list_nodes(nodes)
+            result = list_nodes(
+                nodes,
+                runtime_nodes,
+            )
 
             if args.json:
                 print_json(result)
             else:
                 for node in result:
-                    roles = ", ".join(node["desired_roles"])
+                    roles = ", ".join(
+                        node["desired_roles"]
+                    )
+
+                    runtime = node.get(
+                        "runtime",
+                        {},
+                    )
+
+                    reachable = runtime.get(
+                        "reachable",
+                        "unknown",
+                    )
+
                     print(
                         f"{node['name']:10} "
                         f"{node['address']:15} "
                         f"{node['platform']:8} "
+                        f"reachable={reachable!s:7} "
                         f"{roles}"
                     )
 
         elif args.command == "node":
-            result = get_node(nodes, args.name)
+            result = get_node(
+                nodes,
+                args.name,
+                runtime_nodes,
+            )
             print_json(result)
 
         elif args.command == "find":
-            matches = find_nodes(nodes, args.capability)
+            matches = find_nodes(
+                nodes,
+                args.capability,
+            )
 
             if not matches:
                 raise ClusterError(
-                    f"No node provides capability: {args.capability}"
+                    f"No node provides capability: "
+                    f"{args.capability}"
                 )
 
             if args.json:
@@ -114,16 +147,27 @@ def main():
             result = place(
                 nodes,
                 args.required_capabilities,
+                runtime_nodes,
             )
 
             if args.json:
                 print_json(result)
             else:
-                print(f"Selected: {result['selected']}")
+                print(
+                    f"Selected: "
+                    f"{result['selected']}"
+                )
+                print(
+                    f"Policy: "
+                    f"{result['selection_policy']}"
+                )
                 print("Candidates:")
 
                 for candidate in result["candidates"]:
-                    print(f"  - {candidate['name']}")
+                    print(
+                        f"  - {candidate['name']} "
+                        f"(score={candidate['score']})"
+                    )
 
     except ClusterError as exc:
         if args.json:
@@ -132,7 +176,10 @@ def main():
                 "error": str(exc),
             })
         else:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            print(
+                f"ERROR: {exc}",
+                file=sys.stderr,
+            )
 
         return 2
 
